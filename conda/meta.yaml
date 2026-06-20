@@ -1,0 +1,58 @@
+{% set version = environ.get('GIT_DESCRIBE_TAG', '0.1.0').lstrip('v') %}
+
+package:
+  name: curvepress
+  version: {{ version }}
+
+source:
+  path: ..
+
+build:
+  number: 0
+  script_env:
+    - CARGO_HOME
+  script:
+    - {{ PYTHON }} -m pip install maturin
+    - maturin build --release --features python --out dist
+    - {{ PYTHON }} -m pip install --no-deps --no-index --find-links dist curvepress
+
+requirements:
+  build:
+    - {{ compiler('c') }}
+    - rust >=1.70                     # [not win]
+    - rust-std-x86_64-pc-windows-msvc # [win]
+  host:
+    - python {{ python }}
+    - pip
+    - numpy >=1.21
+  run:
+    - python {{ python }}
+    - numpy >=1.21
+
+test:
+  imports:
+    - curvepress
+  commands:
+    - python -c "import curvepress; print(curvepress.version())"
+  requires:
+    - pytest
+    - numpy
+  source_files:
+    - tests/python/
+
+about:
+  home: https://github.com/yourname/curvepress
+  license: MIT
+  license_file: LICENSE
+  summary: "Lossy time series compression: RDP/VW point reduction + quantization"
+  description: |
+    curvepress compresses (timestamp, value) time series via Ramer-Douglas-Peucker
+    or Visvalingam-Whyatt point reduction followed by epsilon-derived quantization
+    and delta/zigzag/varint integer packing. No entropy coder. Rust core with
+    Python, C++, and WASM bindings.
+  doc_url: https://github.com/yourname/curvepress#readme
+  dev_url: https://github.com/yourname/curvepress
+
+extra:
+  recipe-maintainers:
+    - yourname
