@@ -69,6 +69,23 @@ or a four-language distribution from one core.
 | Error bound AND point count | **RDP-n** (`algo=RdpN`, set both) — binary-searches epsilon |
 | Very noisy input, RDP wasting budget | Set `radial_prefilter` to drop sub-noise points first |
 
+### VW / RDP-n: automatic quantization epsilon
+
+VW and RDP-n do not use `epsilon` for point selection. Instead, after simplification,
+curvepress **measures the actual maximum vertical deviation** of every dropped point from
+the piecewise-linear reconstruction of the kept points and uses that as the quantization
+granularity. This keeps the pipeline self-consistent:
+
+```
+VW keeps n_out points
+  → max_dev = max |orig_i − lerp(kept_neighbors)|   (measured automatically)
+  → quantize with epsilon = max_dev
+  → total error ≤ 1.5 × max_dev
+```
+
+`cfg.epsilon` is still used as a fallback when all points are kept (no error to measure).
+For VW, you only need to set `n_out`; `epsilon` can be left at its default.
+
 ---
 
 ## Axis normalization
@@ -88,14 +105,20 @@ the value-domain `max_error ≤ 1.5 × epsilon` contract is no longer guaranteed
 When `normalize_axes = false`:
 
 ```
-max_error ≤ ~1.5 × epsilon
+max_error ≤ ~1.5 × effective_epsilon
 ```
+
+| Algo | effective_epsilon |
+|---|---|
+| **RDP** | `cfg.epsilon` (user-supplied) |
+| **VW** | measured max vertical deviation of dropped points (automatic) |
+| **RDP-n** | measured max vertical deviation of dropped points (automatic) |
 
 - RDP guarantees: each dropped point deviates ≤ `epsilon` from the linear interpolant of
   its two kept neighbours.
-- Quantization adds ≤ `epsilon/2` on top.
+- Quantization adds ≤ `effective_epsilon/2` on top.
 
-For a strict `epsilon` bound: set `epsilon/2` in the config and accept the halved
+For a strict `epsilon` bound with RDP: set `epsilon/2` in the config and accept the halved
 compression ratio.
 
 ---

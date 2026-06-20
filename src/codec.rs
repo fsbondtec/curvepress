@@ -148,8 +148,33 @@ pub fn compress_inner(
 
     let n_kept = kept_ts.len();
 
-    // 3. Quantize kept values.
-    let q = quantize(&kept_val, cfg.epsilon);
+    // 3. Determine quantization epsilon.
+    //
+    // RDP: cfg.epsilon is the explicit geometric tolerance — use it directly.
+    //
+    // VW / RDP-n: cfg.epsilon is not used by the simplifier, so using it for
+    // quantization would be arbitrary.  Instead, measure the actual maximum
+    // vertical deviation of every dropped point from the piecewise-linear
+    // interpolation of the kept points (using original values).  That is the
+    // true reconstruction error introduced by the simplification step, and
+    // quantizing with it adds at most half that value on top — giving a
+    // self-consistent total error of ~1.5 × effective_epsilon.
+    //
+    // Fallback: if all points were kept (n_kept == pf_ts.len()) the measured
+    // error is 0 — we fall back to cfg.epsilon so the caller still controls
+    // quantization granularity.
+    let quant_epsilon = match cfg.algo {
+        Algo::Rdp => cfg.epsilon,
+        Algo::Vw | Algo::RdpN => {
+            let measured = max_reconstruction_error_of_dropped(
+                &pf_ts, &pf_val, &kept_ts, &kept_val,
+            );
+            if measured > 0.0 { measured } else { cfg.epsilon }
+        }
+    };
+
+    // Quantize kept values.
+    let q = quantize(&kept_val, quant_epsilon);
 
     // 4. Compute max_error over ALL original input points (full lossy pipeline).
     //    Reconstruct via linear interpolation between quantized kept points.
@@ -384,6 +409,49 @@ pub fn interpolate_inner(
 }
 
 // ─── max_error ──────────────────────────────────────────────────────────────
+
+/// Maximum vertical deviation of **dropped** points from the piecewise-linear
+/// interpolation of the kept points (using original, pre-quantization values).
+///
+/// This is used as the quantization epsilon for VW and RDP-n: it is the actual
+/// simplification error, so quantizing with it keeps the total pipeline error
+/// self-consistent at ~1.5× this value.
+///
+/// Returns 0.0 when all points were kept.
+fn max_reconstruction_error_of_dropped(
+    pf_ts: &[i64],
+    pf_val: &[f64],
+    kept_ts: &[i64],
+    kept_val: &[f64],
+) -> f64 {
+    let n_kept = kept_ts.len();
+    if n_kept == 0 || n_kept == pf_ts.len() {
+        return 0.0;
+    }
+
+    // Build a lookup set of kept timestamps so we can skip them quickly.
+    let kept_set: std::collections::HashSet<i64> = kept_ts.iter().cloned().collect();
+    let mut max_err = 0.0_f64;
+    let mut j = 0usize;
+
+    for (&t, &v) in pf_ts.iter().zip(pf_val.iter()) {
+        if kept_set.contains(&t) {
+            continue; // this point is kept — no error contribution
+        }
+        // Advance j so that kept_ts[j] <= t < kept_ts[j+1].
+        while j + 1 < n_kept - 1 && kept_ts[j + 1] <= t {
+            j += 1;
+        }
+        let span = (kept_ts[j + 1] - kept_ts[j]) as f64;
+        let frac = (t - kept_ts[j]) as f64 / span;
+        let recon = kept_val[j] + frac * (kept_val[j + 1] - kept_val[j]);
+        let err = (v - recon).abs();
+        if err > max_err {
+            max_err = err;
+        }
+    }
+    max_err
+}
 
 /// Compute the maximum absolute error over ALL original input points.
 ///

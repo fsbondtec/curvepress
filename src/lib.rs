@@ -6,11 +6,17 @@
 //! # Error-bound contract
 //!
 //! When `normalize_axes = false` the maximum absolute reconstruction error is
-//! approximately `1.5 * epsilon`: RDP introduces at most `epsilon` (dropped
-//! points deviate at most `epsilon` from the linear interpolant of kept
-//! neighbours), and quantization adds at most `epsilon / 2`. To achieve a
-//! strict `epsilon` bound, set `epsilon / 2` in the config and accept the
-//! halved compression ratio.
+//! approximately `1.5 * effective_epsilon`, where `effective_epsilon` depends
+//! on the chosen algorithm:
+//!
+//! - **RDP**: `effective_epsilon = cfg.epsilon` (user-supplied).
+//! - **VW / RDP-n**: `effective_epsilon` is measured automatically as the
+//!   maximum vertical deviation of dropped points from the piecewise-linear
+//!   reconstruction of the kept points. `cfg.epsilon` is used only as a
+//!   fallback when no points are dropped.
+//!
+//! To achieve a strict `epsilon` bound with RDP, set `epsilon / 2` in the
+//! config and accept the halved compression ratio.
 //!
 //! When `normalize_axes = true`, `epsilon` is a Euclidean (time + value)
 //! tolerance; the value-domain error is no longer bounded by `epsilon` and
