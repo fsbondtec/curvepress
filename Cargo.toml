@@ -1,0 +1,47 @@
+[package]
+name = "curvepress"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Lossy time series compression: RDP/VW point reduction + quantization"
+repository = "https://github.com/yourname/curvepress"
+categories = ["compression", "science"]
+keywords = ["compression", "time-series", "rdp", "visvalingam", "quantization"]
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+# lib       → Rust consumers (crates.io)
+# cdylib    → WASM (wasm-pack) and Python (PyO3 extension module)
+# staticlib → C++ (linked by cpp/CMakeLists.txt)
+
+[dependencies]
+thiserror = "1"
+
+[features]
+default = []
+capi   = []                              # enables src/capi.rs; build.rs runs cbindgen
+python = ["dep:pyo3", "dep:numpy"]
+wasm   = ["dep:wasm-bindgen"]
+
+[dependencies.pyo3]
+version = "0.22"
+features = ["extension-module"]
+optional = true
+
+[dependencies.numpy]
+version = "0.22"
+optional = true
+
+[dependencies.wasm-bindgen]
+version = "0.2"
+optional = true
+
+[build-dependencies]
+cbindgen = "0.27"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "bench"
+harness = false

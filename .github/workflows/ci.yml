@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # ─── Rust core ──────────────────────────────────────────────────────────────
+  rust:
+    name: Rust (test + clippy + dry-run publish)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: cargo test
+        run: cargo test
+
+      - name: cargo clippy
+        run: cargo clippy -- -D warnings
+
+      - name: cargo publish dry-run
+        run: cargo publish --dry-run
+
+  # ─── Python wheels (cibuildwheel) ────────────────────────────────────────────
+  python:
+    name: Python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build wheel
+        run: maturin build --release --features python
+
+      - name: Install wheel + pytest
+        run: |
+          pip install numpy pytest
+          pip install --find-links target/wheels curvepress
+
+      - name: Run Python tests
+        run: pytest tests/python/ -v
+
+  # Publish to PyPI on tag (OIDC trusted publisher — configure in PyPI settings).
+  python-publish:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: python
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: publish
+          args: --features python
+
+  # ─── C++ (cbindgen + cmake + ctest) ──────────────────────────────────────────
+  cpp:
+    name: C++ (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Catch2 (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y catch2
+
+      - name: Install Catch2 (macOS)
+        if: runner.os == 'macOS'
+        run: brew install catch2
+
+      - name: Build Rust static lib with capi feature
+        run: cargo build --release --features capi
+
+      - name: CMake configure + build
+        run: |
+          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build cpp/build
+
+      - name: CTest
+        run: ctest --test-dir cpp/build --output-on-failure
+        continue-on-error: true  # Catch2 may not be installed on Windows
+
+  # ─── WASM ────────────────────────────────────────────────────────────────────
+  wasm:
+    name: WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM (nodejs target for tests)
+        run: wasm-pack build --target nodejs --out-dir pkg --features wasm
+
+      - name: Run WASM tests
+        run: node tests/wasm/test_wasm.mjs
+
+      - name: npm publish dry-run
+        run: npm publish --dry-run

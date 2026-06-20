@@ -1,0 +1,17 @@
+/target/
+/pkg/
+/pkg-node/
+
+# Python build artifacts
+*.egg-info/
+dist/
+__pycache__/
+*.pyo
+*.pyc
+.venv/
+
+# C++ build
+cpp/build/
+
+# wasm-pack
+.wasm-pack/
