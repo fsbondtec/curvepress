@@ -1,52 +1,58 @@
-/// wasm-bindgen WASM binding — exposes the full `Config` surface.
+/// wasm-bindgen WASM binding for curvepress.
 ///
 /// Build: `wasm-pack build --target bundler --features wasm`
 /// The output `pkg/` is an npm-ready package. Refine TS types in
 /// `wasm/curvepress.d.ts`. No C ABI involved — wasm-bindgen is Rust-native.
 use wasm_bindgen::prelude::*;
-use crate::{Algo, Config, TsMode};
 
-fn algo_from_u32(a: u32) -> Algo {
-    match a { 1 => Algo::Vw, 2 => Algo::RdpN, _ => Algo::Rdp }
-}
-fn ts_mode_from_u32(m: u32) -> TsMode {
-    if m == 1 { TsMode::Regular } else { TsMode::Irregular }
-}
-
-/// Compress time series data into a byte stream.
+/// Compress with Ramer-Douglas-Peucker.
 ///
 /// @param timestamps  BigInt64Array of strictly increasing nanosecond timestamps.
 /// @param values      Float64Array of finite values (no NaN / Inf).
-/// @param epsilon     Max absolute error for RDP / RDP-N (default 1.0).
-/// @param algo        0=RDP, 1=VW, 2=RDP-N (default 0).
-/// @param n_out       Target point count for VW / RDP-N (default 100).
-/// @param normalize_axes  Scale time axis before distance computation (default false).
-/// @param value_range Override for normalization / RDP-N bound; 0 = auto (default 0).
-/// @param ts_mode     0=Irregular, 1=Regular (default 0).
-/// @param radial_prefilter  Radial distance pre-filter radius; null = disabled (default null).
+/// @param epsilon     Max absolute error in the value domain.
 /// @returns Uint8Array byte stream.
 #[wasm_bindgen]
-pub fn compress(
+pub fn compress_rdp(
     timestamps: &[i64],
     values: &[f64],
     epsilon: f64,
-    algo: u32,
-    n_out: usize,
-    normalize_axes: bool,
-    value_range: f64,
-    ts_mode: u32,
-    radial_prefilter: Option<f64>,
 ) -> Result<Vec<u8>, JsError> {
-    let cfg = Config {
-        algo: algo_from_u32(algo),
-        ts_mode: ts_mode_from_u32(ts_mode),
-        epsilon,
-        n_out,
-        radial_prefilter,
-        normalize_axes,
-        value_range,
-    };
-    crate::compress(timestamps, values, &cfg).map_err(|e| JsError::new(&e.to_string()))
+    crate::compress_rdp(timestamps, values, epsilon)
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Compress with Visvalingam-Whyatt.
+///
+/// @param timestamps  BigInt64Array of strictly increasing nanosecond timestamps.
+/// @param values      Float64Array of finite values.
+/// @param n_out       Exact number of kept points.
+/// @returns Uint8Array byte stream.
+#[wasm_bindgen]
+pub fn compress_vw(
+    timestamps: &[i64],
+    values: &[f64],
+    n_out: usize,
+) -> Result<Vec<u8>, JsError> {
+    crate::compress_vw(timestamps, values, n_out)
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Compress with RDP-N (binary-searched epsilon to hit `n_out` points).
+///
+/// @param timestamps  BigInt64Array.
+/// @param values      Float64Array.
+/// @param n_out       Target point count.
+/// @param epsilon     Upper bound for the RDP search.
+/// @returns Uint8Array byte stream.
+#[wasm_bindgen]
+pub fn compress_rdpn(
+    timestamps: &[i64],
+    values: &[f64],
+    n_out: usize,
+    epsilon: f64,
+) -> Result<Vec<u8>, JsError> {
+    crate::compress_rdpn(timestamps, values, n_out, epsilon)
+        .map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Decompressed time series data.
@@ -69,9 +75,9 @@ impl Decoded {
     pub fn len(&self) -> usize { self.timestamps.len() }
 }
 
-/// Decompress a byte stream produced by `compress`.
+/// Decompress a byte stream produced by any `compress_*` function.
 ///
-/// @param data  Uint8Array produced by compress().
+/// @param data  Uint8Array produced by a compress function.
 /// @returns Decoded object with .timestamps (BigInt64Array) and .values (Float64Array).
 #[wasm_bindgen]
 pub fn decompress(data: &[u8]) -> Result<Decoded, JsError> {
@@ -80,23 +86,19 @@ pub fn decompress(data: &[u8]) -> Result<Decoded, JsError> {
     Ok(Decoded { timestamps, values })
 }
 
-/// Interpolate kept support points onto a regular time grid.
+/// Reconstruct the value at a single timestamp `t` from the support points.
 ///
 /// @param timestamps  BigInt64Array of kept timestamps (from decompress).
 /// @param values      Float64Array of kept values (from decompress).
-/// @param t_start     Grid start (nanoseconds).
-/// @param t_end       Grid end (nanoseconds, inclusive).
-/// @param interval_ns Grid step size (nanoseconds).
-/// @returns Float64Array of interpolated values (length = floor((t_end-t_start)/interval)+1).
+/// @param t           Query timestamp (nanoseconds, bigint).
+/// @returns Interpolated value (number). Clamped at data boundaries.
 #[wasm_bindgen]
 pub fn interpolate(
     timestamps: &[i64],
     values: &[f64],
-    t_start: i64,
-    t_end: i64,
-    interval_ns: i64,
-) -> Result<Vec<f64>, JsError> {
-    crate::interpolate(timestamps, values, t_start, t_end, interval_ns)
+    t: i64,
+) -> Result<f64, JsError> {
+    crate::interpolate(timestamps, values, t)
         .map_err(|e| JsError::new(&e.to_string()))
 }
 

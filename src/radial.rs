@@ -3,6 +3,7 @@
 ///
 /// This is a cheap noise remover before RDP. The first and last points are
 /// always kept.
+#[allow(dead_code)]
 pub fn radial_filter(ts: &[i64], val: &[f64], radius: f64) -> Vec<bool> {
     let n = ts.len();
     let mut kept = vec![false; n];

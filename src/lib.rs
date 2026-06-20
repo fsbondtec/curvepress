@@ -3,24 +3,17 @@
 //! All algorithm logic lives in this crate. C++/Python/WASM are thin bindings
 //! over the public API exposed here.
 //!
-//! # Error-bound contract
+//! # Usage
 //!
-//! When `normalize_axes = false` the maximum absolute reconstruction error is
-//! approximately `1.5 * effective_epsilon`, where `effective_epsilon` depends
-//! on the chosen algorithm:
+//! Choose a compression algorithm:
+//! - [`compress_rdp`]  — Ramer-Douglas-Peucker (epsilon-based, ~1.5× error bound)
+//! - [`compress_vw`]   — Visvalingam-Whyatt (target point count)
+//! - [`compress_rdpn`] — RDP with binary search to hit a target point count
 //!
-//! - **RDP**: `effective_epsilon = cfg.epsilon` (user-supplied).
-//! - **VW / RDP-n**: `effective_epsilon` is measured automatically as the
-//!   maximum vertical deviation of dropped points from the piecewise-linear
-//!   reconstruction of the kept points. `cfg.epsilon` is used only as a
-//!   fallback when no points are dropped.
+//! Decompress with [`decompress`], then query values with [`interpolate`].
 //!
-//! To achieve a strict `epsilon` bound with RDP, set `epsilon / 2` in the
-//! config and accept the halved compression ratio.
-//!
-//! When `normalize_axes = true`, `epsilon` is a Euclidean (time + value)
-//! tolerance; the value-domain error is no longer bounded by `epsilon` and
-//! `Stats::max_error` is reported informatively rather than as a guarantee.
+//! The time axis is always normalized to the value range before distance
+//! computation, so `epsilon` is always a value-domain tolerance.
 
 mod rdp;
 mod vw;
@@ -36,73 +29,22 @@ pub use error::CpError;
 #[cfg(feature = "python")] mod python;
 #[cfg(feature = "wasm")]   mod wasm;
 
+// ─── Internal types ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Algo { Rdp, Vw, RdpN }
+
+pub(crate) struct Config {
+    pub(crate) algo: Algo,
+    /// RDP / RDP-N: maximum absolute error in the value domain.
+    pub(crate) epsilon: f64,
+    /// VW / RDP-N: target number of output points. Clamped to `[2, n]`.
+    pub(crate) n_out: usize,
+}
+
 // ─── Public types ────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Algo {
-    /// Ramer-Douglas-Peucker (epsilon-based). Default.
-    Rdp,
-    /// Visvalingam-Whyatt (target-count-based, O(n log n)).
-    Vw,
-    /// RDP with binary-searched epsilon to hit a target point count.
-    RdpN,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TsMode {
-    /// Timestamps are uniformly spaced; encode t0 + interval + index stream.
-    Regular,
-    /// Timestamps are irregularly spaced; encode delta stream. Default.
-    Irregular,
-}
-
-/// Compression configuration.
-#[derive(Debug, Clone)]
-pub struct Config {
-    pub algo: Algo,
-    pub ts_mode: TsMode,
-    /// RDP / RDP-N: maximum absolute error in the value domain.
-    pub epsilon: f64,
-    /// VW / RDP-N: target number of output points. Clamped to `[2, n]`.
-    pub n_out: usize,
-    /// Optional radial-distance pre-filter radius (value domain).
-    /// Drops any point whose distance from the last kept point is below this.
-    /// `None` (default) disables the pre-filter.
-    pub radial_prefilter: Option<f64>,
-    /// Scale the time axis so the full time span maps onto `value_range`
-    /// before computing distances / areas. Prevents the time axis from
-    /// dominating when timestamps are in nanoseconds.
-    ///
-    /// Note: when `true`, `epsilon` becomes a Euclidean tolerance and the
-    /// `max_error <= 1.5 * epsilon` contract is no longer guaranteed.
-    pub normalize_axes: bool,
-    /// Expected max–min of values. Used as the scale target when
-    /// `normalize_axes = true`, and as the search bound for RDP-N.
-    ///
-    /// Set to `0.0` (or leave at default `1.0` which will be overridden
-    /// at runtime) to let curvepress measure the actual range from the data.
-    /// Any value `<= 0` causes a fall-back to the measured range.
-    pub value_range: f64,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            algo: Algo::Rdp,
-            ts_mode: TsMode::Irregular,
-            epsilon: 1.0,
-            n_out: 100,
-            radial_prefilter: None,
-            normalize_axes: false,
-            // 0.0 = auto: fall back to measured val_max-val_min.
-            // Set a positive value to override (e.g. when you know the
-            // expected signal range beforehand).
-            value_range: 0.0,
-        }
-    }
-}
-
-/// Compression statistics.
+/// Compression statistics returned by `*_stats` variants.
 #[derive(Debug, Clone, Default)]
 pub struct Stats {
     pub n_input: usize,
@@ -114,56 +56,62 @@ pub struct Stats {
     pub ratio: f64,
     /// Maximum absolute reconstruction error over all original input points
     /// (full lossy pipeline: point-drop + quantization).
-    /// Bounded by ~`1.5 * epsilon` when `normalize_axes = false`.
+    /// Bounded by ~`1.5 * epsilon` for RDP.
     pub max_error: f64,
     pub quant_bits: u32,
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
-/// Compress `(timestamp_ns, value)` pairs into a self-describing byte stream.
-///
-/// # Preconditions
-/// - `timestamps_ns` must be strictly increasing.
-/// - `values` must be finite (no NaN, no Inf).
-/// - Both slices must have the same length and be non-empty.
-pub fn compress(
-    timestamps_ns: &[i64],
-    values: &[f64],
-    cfg: &Config,
-) -> Result<Vec<u8>, CpError> {
-    codec::compress_inner(timestamps_ns, values, cfg).map(|(data, _)| data)
+/// Compress with Ramer-Douglas-Peucker. `epsilon` is the maximum absolute
+/// reconstruction error in the value domain.
+pub fn compress_rdp(ts: &[i64], val: &[f64], epsilon: f64) -> Result<Vec<u8>, CpError> {
+    codec::compress_inner(ts, val, &Config { algo: Algo::Rdp, epsilon, n_out: 0 })
+        .map(|(d, _)| d)
 }
 
-/// Same as [`compress`] but also returns [`Stats`].
-pub fn compress_with_stats(
-    timestamps_ns: &[i64],
-    values: &[f64],
-    cfg: &Config,
-) -> Result<(Vec<u8>, Stats), CpError> {
-    codec::compress_inner(timestamps_ns, values, cfg)
+/// Like [`compress_rdp`] but also returns [`Stats`].
+pub fn compress_rdp_stats(ts: &[i64], val: &[f64], epsilon: f64) -> Result<(Vec<u8>, Stats), CpError> {
+    codec::compress_inner(ts, val, &Config { algo: Algo::Rdp, epsilon, n_out: 0 })
 }
 
-/// Decompress a byte stream produced by [`compress`] to the kept support points.
+/// Compress with Visvalingam-Whyatt. `n_out` is the exact number of kept points.
+pub fn compress_vw(ts: &[i64], val: &[f64], n_out: usize) -> Result<Vec<u8>, CpError> {
+    codec::compress_inner(ts, val, &Config { algo: Algo::Vw, epsilon: 0.0, n_out })
+        .map(|(d, _)| d)
+}
+
+/// Like [`compress_vw`] but also returns [`Stats`].
+pub fn compress_vw_stats(ts: &[i64], val: &[f64], n_out: usize) -> Result<(Vec<u8>, Stats), CpError> {
+    codec::compress_inner(ts, val, &Config { algo: Algo::Vw, epsilon: 0.0, n_out })
+}
+
+/// Compress with RDP binary-searched to hit `n_out` points. `epsilon` is used
+/// as the search bound (upper limit for the RDP epsilon).
+pub fn compress_rdpn(ts: &[i64], val: &[f64], n_out: usize, epsilon: f64) -> Result<Vec<u8>, CpError> {
+    codec::compress_inner(ts, val, &Config { algo: Algo::RdpN, epsilon, n_out })
+        .map(|(d, _)| d)
+}
+
+/// Like [`compress_rdpn`] but also returns [`Stats`].
+pub fn compress_rdpn_stats(ts: &[i64], val: &[f64], n_out: usize, epsilon: f64) -> Result<(Vec<u8>, Stats), CpError> {
+    codec::compress_inner(ts, val, &Config { algo: Algo::RdpN, epsilon, n_out })
+}
+
+/// Decompress a byte stream produced by any `compress_*` function.
 ///
-/// The returned vectors have length `Stats::n_kept` (not `n_input`).
+/// Returns the kept support points `(timestamps_ns, values)`.
 pub fn decompress(data: &[u8]) -> Result<(Vec<i64>, Vec<f64>), CpError> {
     codec::decompress_inner(data)
 }
 
-/// Reconstruct values on a regular grid from kept support points via linear
-/// interpolation.
+/// Reconstruct the value at a single timestamp `t` from the support points
+/// via linear interpolation.
 ///
-/// - Grid points outside `[ts[0], ts[n-1]]` are clamped (flat extrapolation).
-/// - Output length = `floor((t_end - t_start) / interval_ns) + 1`.
-pub fn interpolate(
-    ts: &[i64],
-    val: &[f64],
-    t_start: i64,
-    t_end: i64,
-    interval_ns: i64,
-) -> Result<Vec<f64>, CpError> {
-    codec::interpolate_inner(ts, val, t_start, t_end, interval_ns)
+/// - `t` before `ts[0]` → clamped to `val[0]` (flat extrapolation).
+/// - `t` after `ts[last]` → clamped to `val[last]`.
+pub fn interpolate(ts: &[i64], val: &[f64], t: i64) -> Result<f64, CpError> {
+    codec::interpolate_point(ts, val, t)
 }
 
 /// Semver string of this build.

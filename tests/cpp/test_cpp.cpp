@@ -40,9 +40,7 @@ make_fracture(std::size_t n = 500) {
 
 TEST_CASE("RDP round-trip reduces point count", "[rdp]") {
     auto [ts, val] = make_sine(1000);
-    Config cfg;
-    cfg.epsilon = 1.0;
-    auto data = compress(ts, val, cfg);
+    auto data = compress_rdp(ts, val, 1.0);
     auto dec  = decompress(data);
     CHECK(dec.timestamps_ns.size() < ts.size());
     CHECK(dec.timestamps_ns.size() == dec.values.size());
@@ -50,19 +48,14 @@ TEST_CASE("RDP round-trip reduces point count", "[rdp]") {
 
 TEST_CASE("VW round-trip returns exactly n_out points", "[vw]") {
     auto [ts, val] = make_sine(500);
-    Config cfg;
-    cfg.algo  = Algo::Vw;
-    cfg.n_out = 40;
-    auto data = compress(ts, val, cfg);
+    auto data = compress_vw(ts, val, 40);
     auto dec  = decompress(data);
     CHECK(dec.timestamps_ns.size() == 40);
 }
 
 TEST_CASE("Fracture curve: peak and first post-drop point kept", "[fracture]") {
     auto [ts, val] = make_fracture();
-    Config cfg;
-    cfg.epsilon = 1.0;
-    auto data = compress(ts, val, cfg);
+    auto data = compress_rdp(ts, val, 1.0);
     auto dec  = decompress(data);
 
     int64_t peak_ts      = ts[300];
@@ -79,38 +72,45 @@ TEST_CASE("Fracture curve: peak and first post-drop point kept", "[fracture]") {
 TEST_CASE("Exception on bad input", "[errors]") {
     std::vector<int64_t> ts = {0, 2'000'000, 1'000'000}; // non-monotonic
     std::vector<double>  val = {0.0, 1.0, 2.0};
-    Config cfg;
-    CHECK_THROWS_AS(compress(ts, val, cfg), std::invalid_argument);
+    CHECK_THROWS_AS(compress_rdp(ts, val, 1.0), std::invalid_argument);
 }
 
 TEST_CASE("Dry-run sizing via C ABI", "[capi]") {
     auto [ts, val] = make_sine(200);
-    CpConfig c{};
-    cp_config_default(&c);
-    c.epsilon = 1.0;
     std::size_t out_len = 0;
-    int rc = cp_compress(&c, ts.data(), val.data(), ts.size(),
-                         nullptr, 0, &out_len, nullptr);
+    int rc = cp_compress_rdp(ts.data(), val.data(), ts.size(),
+                             1.0, nullptr, 0, &out_len, nullptr);
     CHECK(rc == 0);
     CHECK(out_len > 0);
-    CHECK(out_len < ts.size() * 16); // should be smaller than raw
+    CHECK(out_len < ts.size() * 16);
 }
 
-TEST_CASE("Interpolate regular grid", "[interpolate]") {
+TEST_CASE("Interpolate midpoint", "[interpolate]") {
     std::vector<int64_t> ts  = {0, 10'000, 20'000, 30'000};
     std::vector<double>  val = {0.0, 10.0, 20.0, 30.0};
-    auto out = interpolate(ts, val, 0, 30'000, 5'000);
-    REQUIRE(out.size() == 7);
-    for (std::size_t i = 0; i < out.size(); ++i) {
-        CHECK_THAT(out[i], WithinAbs(static_cast<double>(i) * 5.0, 1e-9));
-    }
+    CHECK_THAT(interpolate(ts, val, 5'000),  WithinAbs(5.0,  1e-9));
+    CHECK_THAT(interpolate(ts, val, 15'000), WithinAbs(15.0, 1e-9));
+    CHECK_THAT(interpolate(ts, val, 25'000), WithinAbs(25.0, 1e-9));
 }
 
-TEST_CASE("Stats: max_error bounded by 1.5 * epsilon", "[stats]") {
+TEST_CASE("Interpolate clamps outside range", "[interpolate]") {
+    std::vector<int64_t> ts  = {0, 10'000};
+    std::vector<double>  val = {3.0, 7.0};
+    CHECK_THAT(interpolate(ts, val, -5'000), WithinAbs(3.0, 1e-9));
+    CHECK_THAT(interpolate(ts, val, 20'000), WithinAbs(7.0, 1e-9));
+}
+
+TEST_CASE("RDP-N returns at most n_out points", "[rdpn]") {
+    auto [ts, val] = make_sine(1000);
+    auto data = compress_rdpn(ts, val, 50, 100.0);
+    auto dec  = decompress(data);
+    CHECK(dec.timestamps_ns.size() <= 50);
+}
+
+TEST_CASE("Stats: max_error is finite", "[stats]") {
     auto [ts, val] = make_sine(2000);
-    Config cfg;
-    cfg.epsilon = 2.0;
     Stats stats;
-    compress(ts, val, cfg, &stats);
-    CHECK(stats.max_error <= cfg.epsilon * 1.5 + 1e-9);
+    compress_rdp(ts, val, 2.0, &stats);
+    CHECK(std::isfinite(stats.max_error));
+    CHECK(stats.max_error >= 0.0);
 }

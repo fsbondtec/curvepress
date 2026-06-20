@@ -1,5 +1,5 @@
 #pragma once
-/// curvepress C++20 wrapper — idiomatic RAII/exception interface over the
+/// curvepress C++20 wrapper - idiomatic RAII/exception interface over the
 /// auto-generated `curvepress.h` (cbindgen output).
 ///
 /// The consumer sees ONLY this header. The raw C API is an implementation
@@ -10,7 +10,6 @@
 
 #include <curvepress.h>   // cbindgen-generated, from include/curvepress.h
 #include <cstdint>
-#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -18,27 +17,7 @@
 
 namespace curvepress {
 
-// ─── Enumerations ────────────────────────────────────────────────────────────
-
-enum class Algo  : uint32_t { Rdp = 0, Vw = 1, RdpN = 2 };
-enum class TsMode : uint32_t { Irregular = 0, Regular = 1 };
-
-// ─── Config ──────────────────────────────────────────────────────────────────
-
-/// Compression configuration. Mirrors `crate::Config` in Rust.
-struct Config {
-    Algo        algo              = Algo::Rdp;
-    TsMode      ts_mode           = TsMode::Irregular;
-    double      epsilon           = 1.0;
-    std::size_t n_out             = 100;
-    /// Set to a positive value to enable the radial-distance pre-filter.
-    std::optional<double> radial_prefilter = std::nullopt;
-    bool        normalize_axes    = false;
-    /// 0 = auto (measured from data). Override with a positive value.
-    double      value_range       = 0.0;
-};
-
-// ─── Stats ───────────────────────────────────────────────────────────────────
+// --- Stats -------------------------------------------------------------------
 
 struct Stats {
     std::size_t n_input{};
@@ -50,14 +29,14 @@ struct Stats {
     int         quant_bits{};
 };
 
-// ─── Decoded ─────────────────────────────────────────────────────────────────
+// --- Decoded -----------------------------------------------------------------
 
 struct Decoded {
     std::vector<int64_t> timestamps_ns;
     std::vector<double>  values;
 };
 
-// ─── helpers (internal) ──────────────────────────────────────────────────────
+// --- helpers (internal) ------------------------------------------------------
 
 namespace detail {
 
@@ -65,81 +44,115 @@ inline void check(int code) {
     if (code == 0) return;
     const char* msg = cp_strerror(code);
     switch (code) {
-        case CP_ERR_BAD_INPUT:     throw std::invalid_argument(msg);
+        case CP_ERR_BAD_INPUT:        throw std::invalid_argument(msg);
         case CP_ERR_BUFFER_TOO_SMALL: throw std::length_error(msg);
-        case CP_ERR_CORRUPT:       throw std::runtime_error(msg);
-        default:                   throw std::runtime_error(std::string("curvepress: ") + msg);
+        case CP_ERR_CORRUPT:          throw std::runtime_error(msg);
+        default:                      throw std::runtime_error(std::string("curvepress: ") + msg);
     }
 }
 
-inline CpConfig to_c(const Config& cfg) {
-    CpConfig c{};
-    cp_config_default(&c);
-    c.algo                 = static_cast<uint32_t>(cfg.algo);
-    c.ts_mode              = static_cast<uint32_t>(cfg.ts_mode);
-    c.epsilon              = cfg.epsilon;
-    c.n_out                = cfg.n_out;
-    c.use_radial_prefilter = cfg.radial_prefilter.has_value() ? 1 : 0;
-    c.radial_epsilon       = cfg.radial_prefilter.value_or(0.0);
-    c.normalize_axes       = cfg.normalize_axes ? 1 : 0;
-    c.value_range          = cfg.value_range;
-    return c;
+inline std::vector<uint8_t> run_compress(
+    std::span<const int64_t> timestamps_ns,
+    std::span<const double>  values,
+    CpStats* cs,
+    auto compress_fn)
+{
+    std::size_t out_len = 0;
+    // Dry run to get required size.
+    detail::check(compress_fn(
+        timestamps_ns.data(), values.data(), timestamps_ns.size(),
+        nullptr, 0, &out_len, nullptr));
+
+    std::vector<uint8_t> out(out_len);
+    detail::check(compress_fn(
+        timestamps_ns.data(), values.data(), timestamps_ns.size(),
+        out.data(), out.size(), &out_len, cs));
+
+    return out;
+}
+
+inline void fill_stats(Stats* dst, const CpStats& src) {
+    if (!dst) return;
+    dst->n_input          = src.n_input;
+    dst->n_kept           = src.n_kept;
+    dst->bytes_raw        = src.bytes_raw;
+    dst->bytes_compressed = src.bytes_compressed;
+    dst->ratio            = src.ratio;
+    dst->max_error        = src.max_error;
+    dst->quant_bits       = static_cast<int>(src.quant_bits);
 }
 
 } // namespace detail
 
-// ─── compress ────────────────────────────────────────────────────────────────
+// --- compress_rdp ------------------------------------------------------------
 
-/// Compress `(timestamps_ns, values)` into a byte stream.
+/// Compress with RDP. `epsilon` is the maximum absolute error in the value domain.
 ///
-/// @throws std::invalid_argument  on bad input (empty, non-monotonic, NaN/Inf).
+/// @throws std::invalid_argument  on bad input.
 /// @throws std::runtime_error     on internal error.
-inline std::vector<uint8_t> compress(
+inline std::vector<uint8_t> compress_rdp(
     std::span<const int64_t> timestamps_ns,
     std::span<const double>  values,
-    const Config&            cfg   = {},
+    double                   epsilon,
     Stats*                   stats = nullptr)
 {
-    CpConfig c = detail::to_c(cfg);
-
-    // Dry run: get required output size.
-    std::size_t out_len = 0;
-    detail::check(cp_compress(
-        &c,
-        timestamps_ns.data(), values.data(), timestamps_ns.size(),
-        nullptr, 0, &out_len,
-        nullptr));
-
-    // Real run.
-    std::vector<uint8_t> out(out_len);
     CpStats cs{};
-    detail::check(cp_compress(
-        &c,
-        timestamps_ns.data(), values.data(), timestamps_ns.size(),
-        out.data(), out.size(), &out_len,
-        stats ? &cs : nullptr));
-
-    if (stats) {
-        stats->n_input          = cs.n_input;
-        stats->n_kept           = cs.n_kept;
-        stats->bytes_raw        = cs.bytes_raw;
-        stats->bytes_compressed = cs.bytes_compressed;
-        stats->ratio            = cs.ratio;
-        stats->max_error        = cs.max_error;
-        stats->quant_bits       = static_cast<int>(cs.quant_bits);
-    }
+    auto fn = [epsilon](auto ts, auto val, auto n, auto ob, auto oc, auto ol, auto st) {
+        return cp_compress_rdp(ts, val, n, epsilon, ob, oc, ol, st);
+    };
+    auto out = detail::run_compress(timestamps_ns, values, stats ? &cs : nullptr, fn);
+    detail::fill_stats(stats, cs);
     return out;
 }
 
-// ─── decompress ──────────────────────────────────────────────────────────────
+// --- compress_vw -------------------------------------------------------------
 
-/// Decompress a byte stream produced by `compress`.
+/// Compress with Visvalingam-Whyatt. `n_out` is the exact number of kept points.
+///
+/// @throws std::invalid_argument  on bad input.
+inline std::vector<uint8_t> compress_vw(
+    std::span<const int64_t> timestamps_ns,
+    std::span<const double>  values,
+    std::size_t              n_out,
+    Stats*                   stats = nullptr)
+{
+    CpStats cs{};
+    auto fn = [n_out](auto ts, auto val, auto n, auto ob, auto oc, auto ol, auto st) {
+        return cp_compress_vw(ts, val, n, n_out, ob, oc, ol, st);
+    };
+    auto out = detail::run_compress(timestamps_ns, values, stats ? &cs : nullptr, fn);
+    detail::fill_stats(stats, cs);
+    return out;
+}
+
+// --- compress_rdpn -----------------------------------------------------------
+
+/// Compress with RDP-N (binary-searched epsilon to hit `n_out` points).
+/// `epsilon` is the upper bound for the RDP search.
+///
+/// @throws std::invalid_argument  on bad input.
+inline std::vector<uint8_t> compress_rdpn(
+    std::span<const int64_t> timestamps_ns,
+    std::span<const double>  values,
+    std::size_t              n_out,
+    double                   epsilon,
+    Stats*                   stats = nullptr)
+{
+    CpStats cs{};
+    auto fn = [n_out, epsilon](auto ts, auto val, auto n, auto ob, auto oc, auto ol, auto st) {
+        return cp_compress_rdpn(ts, val, n, n_out, epsilon, ob, oc, ol, st);
+    };
+    auto out = detail::run_compress(timestamps_ns, values, stats ? &cs : nullptr, fn);
+    detail::fill_stats(stats, cs);
+    return out;
+}
+
+// --- decompress --------------------------------------------------------------
+
+/// Decompress a byte stream produced by any `compress_*` function.
 ///
 /// @throws std::runtime_error on corrupt data.
 inline Decoded decompress(std::span<const uint8_t> data) {
-    // First pass: get n_kept without allocating target buffers.
-    // We allocate conservatively: use n_input from the header (first 32 bytes).
-    // The header stores n_input at offset 28 and n_kept at offset 24.
     if (data.size() < 32) throw std::runtime_error("curvepress: corrupt stream");
     uint32_t n_kept_hdr{};
     std::memcpy(&n_kept_hdr, data.data() + 24, 4);
@@ -159,35 +172,27 @@ inline Decoded decompress(std::span<const uint8_t> data) {
     return out;
 }
 
-// ─── interpolate ─────────────────────────────────────────────────────────────
+// --- interpolate -------------------------------------------------------------
 
-/// Reconstruct values on a regular grid via linear interpolation.
+/// Reconstruct the value at a single timestamp `t` from the support points
+/// via linear interpolation.
 ///
-/// Output length = floor((t_end - t_start) / interval_ns) + 1.
 /// Points outside the data range are clamped (flat extrapolation).
 ///
 /// @throws std::invalid_argument on bad parameters.
-inline std::vector<double> interpolate(
+inline double interpolate(
     std::span<const int64_t> ts,
     std::span<const double>  val,
-    int64_t t_start,
-    int64_t t_end,
-    int64_t interval_ns)
+    int64_t                  t)
 {
-    if (interval_ns <= 0) throw std::invalid_argument("curvepress: interval_ns must be > 0");
-    if (t_end < t_start)  throw std::invalid_argument("curvepress: t_end < t_start");
-
-    const std::size_t n_out =
-        static_cast<std::size_t>((t_end - t_start) / interval_ns) + 1u;
-    std::vector<double> out(n_out);
+    double result{};
     detail::check(cp_interpolate(
         ts.data(), val.data(), ts.size(),
-        t_start, t_end, interval_ns,
-        out.data(), n_out));
-    return out;
+        t, &result));
+    return result;
 }
 
-// ─── version ─────────────────────────────────────────────────────────────────
+// --- version -----------------------------------------------------------------
 
 inline const char* version() { return cp_version(); }
 

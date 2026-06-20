@@ -1,18 +1,16 @@
-/// C ABI surface for the C++ binding.
+﻿/// C ABI surface for the C++ binding.
 ///
 /// These `extern "C"` functions are the ONLY C-ABI surface in curvepress.
 /// `cbindgen` generates `include/curvepress.h` from them at build time.
-/// The C++ consumer never calls this directly — it uses `cpp/include/curvepress/curvepress.hpp`.
+/// The C++ consumer never calls this directly â€” it uses `cpp/include/curvepress/curvepress.hpp`.
 ///
 /// Every function catches panics (via `std::panic::catch_unwind`) and translates
 /// them to error codes, because panics crossing the FFI boundary are UB.
-use crate::{Algo, Config, TsMode};
-use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::panic::catch_unwind;
 use std::slice;
 
-// ─── Error codes ─────────────────────────────────────────────────────────────
+// â”€â”€â”€ Error codes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 pub const CP_OK: i32 = 0;
 pub const CP_ERR_BAD_INPUT: i32 = -1;
@@ -29,25 +27,9 @@ fn to_code(r: &crate::CpError) -> i32 {
     }
 }
 
-// ─── CpConfig ────────────────────────────────────────────────────────────────
+// â”€â”€â”€ CpStats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-/// C representation of `Config`.
-/// `algo`: 0=RDP, 1=VW, 2=RDP_N
-/// `ts_mode`: 0=Irregular, 1=Regular
-/// `use_radial_prefilter`: 0=disabled, 1=enabled
-#[repr(C)]
-pub struct CpConfig {
-    pub algo: u32,
-    pub ts_mode: u32,
-    pub epsilon: f64,
-    pub n_out: usize,
-    pub use_radial_prefilter: i32,
-    pub radial_epsilon: f64,
-    pub normalize_axes: i32,
-    pub value_range: f64,
-}
-
-/// C representation of `Stats`.
+/// Compression statistics (optional output from compress functions).
 #[repr(C)]
 pub struct CpStats {
     pub n_input: usize,
@@ -59,92 +41,136 @@ pub struct CpStats {
     pub quant_bits: u32,
 }
 
-fn from_c_config(c: &CpConfig) -> Config {
-    Config {
-        algo: match c.algo { 1 => Algo::Vw, 2 => Algo::RdpN, _ => Algo::Rdp },
-        ts_mode: if c.ts_mode == 1 { TsMode::Regular } else { TsMode::Irregular },
-        epsilon: c.epsilon,
-        n_out: c.n_out,
-        radial_prefilter: if c.use_radial_prefilter != 0 { Some(c.radial_epsilon) } else { None },
-        normalize_axes: c.normalize_axes != 0,
-        value_range: c.value_range,
+fn write_stats(stats: *mut CpStats, s: &crate::Stats) {
+    if stats.is_null() { return; }
+    unsafe {
+        (*stats) = CpStats {
+            n_input: s.n_input,
+            n_kept: s.n_kept,
+            bytes_raw: s.bytes_raw,
+            bytes_compressed: s.bytes_compressed,
+            ratio: s.ratio,
+            max_error: s.max_error,
+            quant_bits: s.quant_bits,
+        };
     }
 }
 
-// ─── Public C functions ──────────────────────────────────────────────────────
-
-/// Fill `*cfg` with default values.
-///
-/// # Safety
-/// `cfg` must be a valid, aligned, non-null pointer to a `CpConfig`.
-#[no_mangle]
-pub unsafe extern "C" fn cp_config_default(cfg: *mut CpConfig) {
-    if cfg.is_null() { return; }
-    let def = Config::default();
-    (*cfg) = CpConfig {
-        algo: match def.algo { Algo::Rdp => 0, Algo::Vw => 1, Algo::RdpN => 2 },
-        ts_mode: if def.ts_mode == TsMode::Regular { 1 } else { 0 },
-        epsilon: def.epsilon,
-        n_out: def.n_out,
-        use_radial_prefilter: 0,
-        radial_epsilon: 0.0,
-        normalize_axes: 0,
-        value_range: def.value_range,
-    };
-}
-
-/// Compress `n` `(timestamp_ns, value)` pairs.
-///
-/// If `out_buf` is null, writes the required byte length to `*out_len` (dry run).
-/// Returns 0 on success, or a negative error code.
-///
-/// # Safety
-/// All non-null pointers must be valid and properly aligned for their types.
-#[no_mangle]
-pub unsafe extern "C" fn cp_compress(
-    cfg: *const CpConfig,
-    timestamps_ns: *const i64,
-    values: *const f64,
-    n: usize,
+fn compress_to_buf(
+    result: Result<(Vec<u8>, crate::Stats), crate::CpError>,
     out_buf: *mut u8,
     out_cap: usize,
     out_len: *mut usize,
     stats: *mut CpStats,
 ) -> i32 {
-    if cfg.is_null() || timestamps_ns.is_null() || values.is_null() || out_len.is_null() {
+    match result {
+        Err(e) => to_code(&e),
+        Ok((data, s)) => {
+            unsafe { *out_len = data.len(); }
+            write_stats(stats, &s);
+            if out_buf.is_null() {
+                return CP_OK; // dry run
+            }
+            if out_cap < data.len() {
+                return CP_ERR_BUFFER_TOO_SMALL;
+            }
+            unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), out_buf, data.len()); }
+            CP_OK
+        }
+    }
+}
+
+// â”€â”€â”€ Public C functions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+/// Compress with RDP. `epsilon` is the maximum absolute error in the value domain.
+///
+/// Pass `out_buf = NULL` for a dry run (writes required length to `*out_len`).
+/// Returns 0 on success, negative error code otherwise.
+///
+/// # Safety
+/// All non-null pointers must be valid and properly aligned for their types.
+#[no_mangle]
+pub unsafe extern "C" fn cp_compress_rdp(
+    timestamps_ns: *const i64,
+    values: *const f64,
+    n: usize,
+    epsilon: f64,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+    stats: *mut CpStats,
+) -> i32 {
+    if timestamps_ns.is_null() || values.is_null() || out_len.is_null() {
         return CP_ERR_NULL;
     }
     let result = catch_unwind(|| {
         let ts = slice::from_raw_parts(timestamps_ns, n);
         let val = slice::from_raw_parts(values, n);
-        let rust_cfg = from_c_config(&*cfg);
-        crate::compress_with_stats(ts, val, &rust_cfg)
+        crate::compress_rdp_stats(ts, val, epsilon)
     });
     match result {
         Err(_) => CP_ERR_PANIC,
-        Ok(Err(e)) => to_code(&e),
-        Ok(Ok((data, s))) => {
-            *out_len = data.len();
-            if !stats.is_null() {
-                (*stats) = CpStats {
-                    n_input: s.n_input,
-                    n_kept: s.n_kept,
-                    bytes_raw: s.bytes_raw,
-                    bytes_compressed: s.bytes_compressed,
-                    ratio: s.ratio,
-                    max_error: s.max_error,
-                    quant_bits: s.quant_bits,
-                };
-            }
-            if out_buf.is_null() {
-                return CP_OK; // dry run: length written, done
-            }
-            if out_cap < data.len() {
-                return CP_ERR_BUFFER_TOO_SMALL;
-            }
-            std::ptr::copy_nonoverlapping(data.as_ptr(), out_buf, data.len());
-            CP_OK
-        }
+        Ok(r) => compress_to_buf(r, out_buf, out_cap, out_len, stats),
+    }
+}
+
+/// Compress with Visvalingam-Whyatt. `n_out` is the target number of kept points.
+///
+/// # Safety
+/// All non-null pointers must be valid and properly aligned for their types.
+#[no_mangle]
+pub unsafe extern "C" fn cp_compress_vw(
+    timestamps_ns: *const i64,
+    values: *const f64,
+    n: usize,
+    n_out: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+    stats: *mut CpStats,
+) -> i32 {
+    if timestamps_ns.is_null() || values.is_null() || out_len.is_null() {
+        return CP_ERR_NULL;
+    }
+    let result = catch_unwind(|| {
+        let ts = slice::from_raw_parts(timestamps_ns, n);
+        let val = slice::from_raw_parts(values, n);
+        crate::compress_vw_stats(ts, val, n_out)
+    });
+    match result {
+        Err(_) => CP_ERR_PANIC,
+        Ok(r) => compress_to_buf(r, out_buf, out_cap, out_len, stats),
+    }
+}
+
+/// Compress with RDP-N (binary-searched epsilon to hit `n_out` points).
+/// `epsilon` is the upper bound for the RDP search.
+///
+/// # Safety
+/// All non-null pointers must be valid and properly aligned for their types.
+#[no_mangle]
+pub unsafe extern "C" fn cp_compress_rdpn(
+    timestamps_ns: *const i64,
+    values: *const f64,
+    n: usize,
+    n_out: usize,
+    epsilon: f64,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+    stats: *mut CpStats,
+) -> i32 {
+    if timestamps_ns.is_null() || values.is_null() || out_len.is_null() {
+        return CP_ERR_NULL;
+    }
+    let result = catch_unwind(|| {
+        let ts = slice::from_raw_parts(timestamps_ns, n);
+        let val = slice::from_raw_parts(values, n);
+        crate::compress_rdpn_stats(ts, val, n_out, epsilon)
+    });
+    match result {
+        Err(_) => CP_ERR_PANIC,
+        Ok(r) => compress_to_buf(r, out_buf, out_cap, out_len, stats),
     }
 }
 
@@ -185,23 +211,19 @@ pub unsafe extern "C" fn cp_decompress(
     }
 }
 
-/// Interpolate onto a regular grid.
+/// Interpolate a single value at timestamp `t` from the support points.
 ///
-/// Output count = floor((t_end - t_start) / interval_ns) + 1. `val_out` must
-/// have at least that many elements.
+/// Writes the interpolated value to `*val_out`. Returns 0 on success.
 ///
 /// # Safety
-/// All pointers must be valid. `val_out` must have sufficient capacity.
+/// All pointers must be valid.
 #[no_mangle]
 pub unsafe extern "C" fn cp_interpolate(
     ts_in: *const i64,
     val_in: *const f64,
     n_in: usize,
-    t_start: i64,
-    t_end: i64,
-    interval_ns: i64,
+    t: i64,
     val_out: *mut f64,
-    n_out: usize,
 ) -> i32 {
     if ts_in.is_null() || val_in.is_null() || val_out.is_null() {
         return CP_ERR_NULL;
@@ -209,16 +231,13 @@ pub unsafe extern "C" fn cp_interpolate(
     let result = catch_unwind(|| {
         let ts = slice::from_raw_parts(ts_in, n_in);
         let val = slice::from_raw_parts(val_in, n_in);
-        crate::interpolate(ts, val, t_start, t_end, interval_ns)
+        crate::interpolate(ts, val, t)
     });
     match result {
         Err(_) => CP_ERR_PANIC,
         Ok(Err(e)) => to_code(&e),
-        Ok(Ok(out)) => {
-            if n_out < out.len() {
-                return CP_ERR_BUFFER_TOO_SMALL;
-            }
-            std::ptr::copy_nonoverlapping(out.as_ptr(), val_out, out.len());
+        Ok(Ok(v)) => {
+            *val_out = v;
             CP_OK
         }
     }
@@ -242,9 +261,9 @@ pub extern "C" fn cp_strerror(err: i32) -> *const c_char {
 /// Return the library version string (null-terminated).
 #[no_mangle]
 pub extern "C" fn cp_version() -> *const c_char {
-    // SAFETY: CARGO_PKG_VERSION is always ASCII + null-terminated after the concat.
     static VERSION: std::sync::OnceLock<std::ffi::CString> = std::sync::OnceLock::new();
     VERSION.get_or_init(|| {
         std::ffi::CString::new(crate::version()).unwrap()
     }).as_ptr()
 }
+
