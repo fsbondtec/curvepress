@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "curvepress"
-version = "0.1.0"
+version = "0.1.1"
 description = "Lossy time series compression: RDP/VW point reduction + quantization"
 license = {text = "MIT"}
 readme = "README.md"
