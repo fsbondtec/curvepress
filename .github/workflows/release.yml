@@ -68,6 +68,20 @@ jobs:
         with:
           sccache: "true"
           args: --release --out dist --find-interpreter
+      # maturin's Windows wheels can carry trailing data after the ZIP end-of-
+      # central-directory record. PyPI rejects that ("Trailing data") and some
+      # readers even throw "Bad magic number". Repacking rebuilds a clean ZIP
+      # (`wheel pack` recomputes RECORD), independent of the Python version.
+      - name: Repack wheels (strip trailing data)
+        shell: bash
+        run: |
+          python -m pip install -U wheel
+          for whl in dist/*.whl; do
+            python -m wheel unpack "$whl" -d _unpack
+            rm "$whl"
+            python -m wheel pack _unpack/* -d dist
+            rm -rf _unpack
+          done
       - uses: actions/upload-artifact@v7
         with:
           name: wheels-windows-${{ matrix.python-version }}
