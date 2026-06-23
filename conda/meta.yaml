@@ -41,7 +41,7 @@ test:
     - tests/python/
 
 about:
-  home: https://github.com/yourname/curvepress
+  home: https://github.com/fsbondtec/curvepress
   license: MIT
   license_file: LICENSE
   summary: "Lossy time series compression: RDP/VW point reduction + quantization"
@@ -50,8 +50,8 @@ about:
     or Visvalingam-Whyatt point reduction followed by epsilon-derived quantization
     and delta/zigzag/varint integer packing. No entropy coder. Rust core with
     Python, C++, and WASM bindings.
-  doc_url: https://github.com/yourname/curvepress#readme
-  dev_url: https://github.com/yourname/curvepress
+  doc_url: https://github.com/fsbondtec/curvepress#readme
+  dev_url: https://github.com/fsbondtec/curvepress
 
 extra:
   recipe-maintainers:

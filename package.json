@@ -14,6 +14,6 @@
   "keywords": ["compression", "time-series", "wasm", "rdp", "visvalingam"],
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourname/curvepress"
+    "url": "https://github.com/fsbondtec/curvepress"
   }
 }

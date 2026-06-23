@@ -4,7 +4,7 @@ version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "Lossy time series compression: RDP/VW point reduction + quantization"
-repository = "https://github.com/yourname/curvepress"
+repository = "https://github.com/fsbondtec/curvepress"
 categories = ["compression", "science"]
 keywords = ["compression", "time-series", "rdp", "visvalingam", "quantization"]
 

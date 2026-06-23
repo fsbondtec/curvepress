@@ -7,7 +7,7 @@ class CurvepressConan(ConanFile):
     version = "0.1.0"
     license = "MIT"
     description = "Lossy time series compression: RDP/VW point reduction + quantization"
-    homepage = "https://github.com/yourname/curvepress"
+    homepage = "https://github.com/fsbondtec/curvepress"
     topics = ("compression", "time-series", "rdp", "visvalingam")
     settings = "os", "compiler", "build_type", "arch"
     generators = "CMakeToolchain", "CMakeDeps"
