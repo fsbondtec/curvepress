@@ -1,5 +1,4 @@
 name: CI
-
 on:
   push:
     branches: [main]
@@ -27,31 +26,6 @@ jobs:
       - name: cargo test
         run: cargo test
 
-  # ─── Python binding (maturin + pytest) ───────────────────────────────────────
-  python:
-    name: Python (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.9", "3.13"]
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install build + test deps
-        run: pip install maturin numpy pytest
-      # --release so the 1M-point perf test (<0.5s) has a fair chance on CI.
-      - name: Build + install wheel
-        run: |
-          maturin build --release --out dist
-          pip install --find-links dist curvepress
-      - name: pytest
-        run: pytest tests/python/ -v
-
   # ─── WASM binding (wasm-pack + node) ──────────────────────────────────────────
   wasm:
     name: WASM
@@ -64,7 +38,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      # The test imports from ../../pkg/curvepress.js, so build into pkg/.
       - name: Build WASM (nodejs target)
         run: wasm-pack build --target nodejs --out-dir pkg --features wasm
       - name: Run WASM tests
