@@ -15,7 +15,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 # staticlib → C++ (linked by cpp/CMakeLists.txt)
 
 [dependencies]
-thiserror = "1"
+thiserror = "2"
 
 [features]
 default = []
