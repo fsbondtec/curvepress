@@ -19,7 +19,7 @@ thiserror = "1"
 
 [features]
 default = []
-capi   = []                              # enables src/capi.rs; build.rs runs cbindgen
+capi   = ["dep:cbindgen"]                # gates src/capi.rs; build.rs generates the C header
 python = ["dep:pyo3", "dep:numpy"]
 wasm   = ["dep:wasm-bindgen"]
 
@@ -37,7 +37,7 @@ version = "0.2"
 optional = true
 
 [build-dependencies]
-cbindgen = "0.27"
+cbindgen = { version = "0.27", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
