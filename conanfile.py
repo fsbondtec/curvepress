@@ -52,8 +52,6 @@ class CurvepressConan(ConanFile):
     def package_info(self):
         self.cpp_info.set_property("cmake_target_name", "curvepress::curvepress")
         self.cpp_info.libs = ["curvepress"]
-        # System libraries that the Rust static lib pulls in, per platform.
-        # (May need tweaking once the first `conan create` link step runs.)
         if self.settings.os == "Linux":
             self.cpp_info.system_libs = ["pthread", "dl", "m"]
         elif self.settings.os == "Macos":
