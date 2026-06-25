@@ -12,8 +12,6 @@
 /// [8]  val_range (f64 LE)
 /// [4]  n_kept    (u32 LE)
 /// [4]  n_input   (u32 LE)
-/// [8]  t0        (i64 LE)
-/// [8]  interval  (i64 LE, meaningful only for Regular, else 0)
 /// [.]  payload   (value varint stream, then timestamp stream)
 /// ```
 use crate::error::CpError;
@@ -25,13 +23,10 @@ use crate::{Algo, Config, Stats};
 
 const MAGIC: &[u8; 4] = b"CPRS";
 const VERSION: u8 = 1;
-const HEADER_LEN: usize = 4 + 1 + 1 + 1 + 1 + 8 + 8 + 4 + 4 + 8 + 8; // = 48
+const HEADER_LEN: usize = 4 + 1 + 1 + 1 + 1 + 8 + 8 + 4 + 4; // = 32
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-fn write_i64_le(buf: &mut Vec<u8>, v: i64) {
-    buf.extend_from_slice(&v.to_le_bytes());
-}
 fn write_f64_le(buf: &mut Vec<u8>, v: f64) {
     buf.extend_from_slice(&v.to_le_bytes());
 }
@@ -39,9 +34,6 @@ fn write_u32_le(buf: &mut Vec<u8>, v: u32) {
     buf.extend_from_slice(&v.to_le_bytes());
 }
 
-fn read_i64_le(data: &[u8], off: usize) -> Option<i64> {
-    data.get(off..off + 8).map(|b| i64::from_le_bytes(b.try_into().unwrap()))
-}
 fn read_f64_le(data: &[u8], off: usize) -> Option<f64> {
     data.get(off..off + 8).map(|b| f64::from_le_bytes(b.try_into().unwrap()))
 }
@@ -168,11 +160,11 @@ pub fn compress_inner(
         write_varint(&mut payload, zigzag_encode(delta));
     }
 
-    // Timestamp stream: always Irregular — t0, then zigzag deltas.
-    write_i64_le_buf(&mut payload, kept_ts[0]);
+    // Timestamp stream: always Irregular — t0 as plain varint, then plain varint deltas.
+    write_varint(&mut payload, kept_ts[0] as u64);
     for i in 1..n_kept {
         let delta = kept_ts[i] - kept_ts[i - 1];
-        write_varint(&mut payload, zigzag_encode(delta));
+        write_varint(&mut payload, delta as u64);
     }
 
     // 6. Assemble header.
@@ -187,9 +179,6 @@ pub fn compress_inner(
     write_f64_le(&mut out, q.val_range);
     write_u32_le(&mut out, n_kept as u32);
     write_u32_le(&mut out, n as u32);
-    let t0 = kept_ts[0];
-    write_i64_le(&mut out, t0);
-    write_i64_le(&mut out, 0i64); // interval field reserved (always Irregular)
     out.extend_from_slice(&payload);
 
     let bytes_raw = n * 16;
@@ -205,11 +194,6 @@ pub fn compress_inner(
     };
 
     Ok((out, stats))
-}
-
-/// Write an i64 little-endian into a payload Vec (without the outer `out` Vec).
-fn write_i64_le_buf(buf: &mut Vec<u8>, v: i64) {
-    buf.extend_from_slice(&v.to_le_bytes());
 }
 
 // ─── decompress ─────────────────────────────────────────────────────────────
@@ -234,8 +218,6 @@ pub fn decompress_inner(data: &[u8]) -> Result<(Vec<i64>, Vec<f64>), CpError> {
     let val_range = read_f64_le(data, 16).ok_or(CpError::Corrupt)?;
     let n_kept = read_u32_le(data, 24).ok_or(CpError::Corrupt)? as usize;
     let _n_input = read_u32_le(data, 28).ok_or(CpError::Corrupt)?;
-    let _t0_header = read_i64_le(data, 32).ok_or(CpError::Corrupt)?;
-    let _interval_header = read_i64_le(data, 40).ok_or(CpError::Corrupt)?;
 
     if n_kept == 0 {
         return Err(CpError::Corrupt);
@@ -254,15 +236,12 @@ pub fn decompress_inner(data: &[u8]) -> Result<(Vec<i64>, Vec<f64>), CpError> {
 
     let values = dequantize(&codes, val_min, val_range, quant_bits);
 
-    // Decode timestamp stream (always Irregular: t0, then zigzag deltas).
+    // Decode timestamp stream (always Irregular: t0 as plain varint, then plain varint deltas).
     let timestamps: Vec<i64> = {
-        let t0 = i64::from_le_bytes(
-            data.get(pos..pos + 8).ok_or(CpError::Corrupt)?.try_into().unwrap(),
-        );
-        pos += 8;
+        let t0 = read_varint(data, &mut pos).ok_or(CpError::Corrupt)? as i64;
         let mut ts = vec![t0];
         for _ in 1..n_kept {
-            let delta = zigzag_decode(read_varint(data, &mut pos).ok_or(CpError::Corrupt)?);
+            let delta = read_varint(data, &mut pos).ok_or(CpError::Corrupt)? as i64;
             let last = *ts.last().unwrap();
             ts.push(last + delta);
         }
