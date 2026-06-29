@@ -1,7 +1,7 @@
 """Python test suite for curvepress.
 
-Run with: pytest tests/python/test_python.py -v
-Requires the wheel to be installed: maturin develop --features python
+Run with: pytest tests/python/ -v
+Requires the package to be installed: pip install --no-build-isolation -e .
 """
 import time
 

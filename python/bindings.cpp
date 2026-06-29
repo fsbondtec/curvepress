@@ -1,6 +1,5 @@
 /// pybind11 bindings for curvepress.
-/// Exposes the same API as the former PyO3/maturin bindings.
-///
+///pip install -i https://test.pypi.org/simple/ curvepress
 /// numpy arrays (int64 timestamps, float64 values) are accepted as input.
 /// compress_* functions return bytes; decompress returns a tuple (ts, values).
 #include <pybind11/numpy.h>
