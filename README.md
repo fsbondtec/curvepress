@@ -10,6 +10,9 @@ Designed for sharp transient signals (fracture curves, impulse tests, load cells
 
 **C++20 header-only library.** No build step, no dependencies.
 
+> **Rust / WASM** targets live in the companion repository
+> [fsbondtec/curvepress-rust](https://github.com/fsbondtec/curvepress-rust).
+
 ## Architecture
 
 ```
