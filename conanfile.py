@@ -1,8 +1,8 @@
 import os
 
 from conan import ConanFile
-from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout
 from conan.tools.files import copy
+from conan.tools.layout import basic_layout
 
 
 class CurvepressConan(ConanFile):
@@ -30,14 +30,10 @@ class CurvepressConan(ConanFile):
     )
 
     def layout(self):
-        cmake_layout(self, src_folder=".")
+        basic_layout(self, src_folder=".")
 
     def package_id(self):
         self.info.clear()
-
-    def generate(self):
-        tc = CMakeToolchain(self)
-        tc.generate()
 
     def build(self):
         # Nothing to compile for a header-only library.
