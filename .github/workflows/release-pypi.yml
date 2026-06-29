@@ -8,87 +8,31 @@ permissions:
   contents: read
 
 jobs:
-  # ─── Linux (manylinux, glibc) ────────────────────────────────────────────────
-  linux:
-    name: Linux (${{ matrix.target }})
-    runs-on: ubuntu-latest
+  # ─── Build wheels (cibuildwheel) ─────────────────────────────────────────────
+  build-wheels:
+    name: Wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64, aarch64]
-    steps:
-      - uses: actions/checkout@v5
-      - uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.target }}
-          manylinux: auto
-          args: --release --out dist -i python3.9 python3.10 python3.11 python3.12 python3.13 python3.14
-      - uses: actions/upload-artifact@v7
-        with:
-          name: wheels-linux-${{ matrix.target }}
-          path: dist
-
-  # ─── Linux (musllinux, Alpine) ───────────────────────────────────────────────
-  musllinux:
-    name: musllinux (${{ matrix.target }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [x86_64, aarch64]
-    steps:
-      - uses: actions/checkout@v5
-      - uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.target }}
-          manylinux: musllinux_1_2
-          args: --release --out dist -i python3.9 python3.10 python3.11 python3.12 python3.13 python3.14
-      - uses: actions/upload-artifact@v7
-        with:
-          name: wheels-musllinux-${{ matrix.target }}
-          path: dist
-
-  # ─── Windows (x64) ───────────────────────────────────────────────────────────
-  windows:
-    name: Windows (py${{ matrix.python-version }})
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, windows-latest, macos-14]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python-version }}
-          architecture: x64
-      - uses: PyO3/maturin-action@v1
+          python-version: "3.12"
+      - name: Install cibuildwheel
+        run: pip install cibuildwheel
+      - name: Build wheels
+        run: python -m cibuildwheel --output-dir dist
+        env:
+          CIBW_BUILD: cp39-* cp310-* cp311-* cp312-* cp313-*
+          CIBW_SKIP: "*-win32 *-manylinux_i686"
+          CIBW_ARCHS_MACOS: arm64
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+      - uses: actions/upload-artifact@v4
         with:
-          args: --release --out dist -i python
-      - uses: actions/upload-artifact@v7
-        with:
-          name: wheels-windows-${{ matrix.python-version }}
-          path: dist
-
-  # ─── macOS (Apple Silicon, arm64) ───────────────────────────────────────────
-  macos:
-    name: macOS (arm64, py${{ matrix.python-version }})
-    runs-on: macos-14
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-      - uses: PyO3/maturin-action@v1
-        with:
-          args: --release --out dist -i python
-      - uses: actions/upload-artifact@v7
-        with:
-          name: wheels-macos-arm64-${{ matrix.python-version }}
+          name: wheels-${{ matrix.os }}
           path: dist
 
   # ─── Source distribution ─────────────────────────────────────────────────────
@@ -97,27 +41,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: PyO3/maturin-action@v1
+      - uses: actions/setup-python@v6
         with:
-          command: sdist
-          args: --out dist
-      - uses: actions/upload-artifact@v7
+          python-version: "3.12"
+      - name: Build sdist
+        run: pip install build ; python -m build --sdist --outdir dist
+      - uses: actions/upload-artifact@v4
         with:
-          name: wheels-sdist
+          name: sdist
           path: dist
 
   # ─── Publish ─────────────────────────────────────────────────────────────────
   publish:
-    name: Publish (${{ github.event_name == 'release' && 'PyPI' || 'TestPyPI' }})
+    name: Publish to PyPI
+    needs: [build-wheels, sdist]
     runs-on: ubuntu-latest
-    needs: [linux, musllinux, windows, macos, sdist]
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v4
         with:
-          pattern: wheels-*
-          path: dist
+          pattern: "wheels-*"
           merge-multiple: true
-
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
       - name: Publish to TestPyPI
         if: github.event_name == 'workflow_dispatch'
         uses: pypa/gh-action-pypi-publish@release/v1
@@ -125,7 +73,6 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
           password: ${{ secrets.TEST_PYPI_API_TOKEN }}
           skip-existing: true
-
       - name: Publish to PyPI
         if: github.event_name == 'release'
         uses: pypa/gh-action-pypi-publish@release/v1
