@@ -1,24 +1,26 @@
 [build-system]
-requires = ["maturin>=1.5"]
-build-backend = "maturin"
+requires = ["scikit-build-core>=0.9", "pybind11>=2.13"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "curvepress"
-version = "0.1.0"
-description = "Lossy time series compression: RDP/VW point reduction + quantization"
+version = "0.2.0"
+description = "Lossy time-series compression: RDP/VW point reduction + quantization (C++ core)"
 license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["numpy>=1.21"]
 keywords = ["compression", "time-series", "rdp", "visvalingam", "quantization"]
 classifiers = [
-    "Programming Language :: Rust",
+    "Programming Language :: C++",
     "Programming Language :: Python :: Implementation :: CPython",
     "License :: OSI Approved :: MIT License",
     "Topic :: Scientific/Engineering",
 ]
 
-[tool.maturin]
-features = ["python", "pyo3/extension-module"]
-module-name = "curvepress._curvepress"
-python-source = "python"
+[tool.scikit-build]
+cmake.build-type = "Release"
+wheel.packages = ["python/curvepress"]
+
+[tool.scikit-build.cmake.define]
+CURVEPRESS_BUILD_PYTHON = "ON"

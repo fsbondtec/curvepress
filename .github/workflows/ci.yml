@@ -12,38 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-14]
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: cargo test
-        run: cargo test
-
-  # ─── WASM binding (wasm-pack + node) ──────────────────────────────────────────
-  wasm:
-    name: WASM
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - name: Build WASM (nodejs target)
-        run: wasm-pack build --target nodejs --out-dir pkg --features wasm
-      - name: Run WASM tests
-        run: node tests/wasm/test_wasm.mjs
-
-  # ─── C++ binding (Conan recipe + test_package) ────────────────────────────────
+  # ─── Conan package + test_package ─────────────────────────────────────────
   conan:
     name: Conan (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -53,8 +22,6 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-14]
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -62,7 +29,6 @@ jobs:
         run: pip install "conan>=2.0"
       - name: Conan profile detect
         run: conan profile detect --force
-      # `conan create` builds the recipe AND runs test_package (compile + link +
-      # run), validating the C ABI header and the per-OS system_libs.
       - name: conan create
-        run: conan create .
+        run: conan create . --build=missing
+

@@ -2,59 +2,54 @@ import os
 
 from conan import ConanFile
 from conan.tools.files import copy
+from conan.tools.layout import basic_layout
 
 
 class CurvepressConan(ConanFile):
     name = "curvepress"
-    version = "0.1.0"
+    version = "0.2.0"
     license = "MIT"
-    description = "Lossy time series compression: RDP/VW point reduction + quantization"
+    description = (
+        "Lossy time-series compression: RDP / Visvalingam-Whyatt point reduction "
+        "+ quantization + LEB-128 varint encoding. Header-only C++20 library."
+    )
     homepage = "https://github.com/fsbondtec/curvepress"
+    url = "https://github.com/conan-io/conan-center-index"
     topics = ("compression", "time-series", "rdp", "visvalingam", "quantization")
-    settings = "os", "compiler", "build_type", "arch"
-    package_type = "static-library"
 
-    # Builds from source: the recipe compiles the Rust core via cargo, which also
-    # generates the C header (build.rs -> cbindgen, capi feature). A Rust
-    # toolchain (cargo) must be available on the build machine. Everything cargo
-    # needs is exported into the recipe.
+    # Header-only: no compiler/OS/arch settings needed for the library itself.
+    package_type = "header-library"
+    no_copy_source = True
+
+    # Only the headers and the CMake wiring are distributed.
     exports_sources = (
-        "Cargo.toml",
-        "Cargo.lock",
-        "build.rs",
-        "cbindgen.toml",
-        "src/*",
-        "benches/*",  # Cargo.toml declares [[bench]]; cargo needs the file to parse
-        "cpp/include/*",
+        "include/*",
+        "cmake/*",
+        "CMakeLists.txt",
+        "LICENSE",
     )
 
+    def layout(self):
+        basic_layout(self, src_folder=".")
+
+    def package_id(self):
+        self.info.clear()
+
     def build(self):
-        # capi feature: compiles src/capi.rs (the C ABI) and runs build.rs, which
-        # writes include/curvepress.h via cbindgen.
-        self.run("cargo build --release --features capi", cwd=self.source_folder)
+        # Nothing to compile for a header-only library.
+        pass
 
     def package(self):
-        # C++ wrapper header: cpp/include/curvepress/curvepress.hpp
+        copy(self, "LICENSE",
+             src=self.source_folder,
+             dst=os.path.join(self.package_folder, "licenses"))
         copy(self, "*.hpp",
-             src=os.path.join(self.source_folder, "cpp", "include"),
-             dst=os.path.join(self.package_folder, "include"))
-        # Generated C header: include/curvepress.h
-        copy(self, "curvepress.h",
              src=os.path.join(self.source_folder, "include"),
              dst=os.path.join(self.package_folder, "include"))
-        # Compiled static library (name differs per platform).
-        rust_out = os.path.join(self.source_folder, "target", "release")
-        copy(self, "libcurvepress.a", src=rust_out,
-             dst=os.path.join(self.package_folder, "lib"), keep_path=False)
-        copy(self, "curvepress.lib", src=rust_out,
-             dst=os.path.join(self.package_folder, "lib"), keep_path=False)
 
     def package_info(self):
+        # Header-only: no compiled library to link.
+        self.cpp_info.bindirs = []
+        self.cpp_info.libdirs = []
         self.cpp_info.set_property("cmake_target_name", "curvepress::curvepress")
-        self.cpp_info.libs = ["curvepress"]
-        if self.settings.os == "Linux":
-            self.cpp_info.system_libs = ["pthread", "dl", "m"]
-        elif self.settings.os == "Macos":
-            self.cpp_info.frameworks = ["Security", "CoreFoundation"]
-        elif self.settings.os == "Windows":
-            self.cpp_info.system_libs = ["ws2_32", "userenv", "ntdll", "bcrypt"]
+        self.cpp_info.set_property("cmake_file_name", "curvepress")

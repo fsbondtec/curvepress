@@ -1,6 +1,10 @@
-/target/
-/pkg/
-/pkg-node/
+# C++ build
+build/
+test_package/build/
+
+# Conan generated
+CMakeUserPresets.json
+test_package/CMakeUserPresets.json
 
 # Python build artifacts
 *.egg-info/
@@ -10,13 +14,3 @@ __pycache__/
 *.pyc
 *.pyd
 .venv/
-
-# C++ build
-cpp/build/
-
-# Conan (test_package build artifacts)
-test_package/build/
-test_package/CMakeUserPresets.json
-
-# wasm-pack
-.wasm-pack/
